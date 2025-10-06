@@ -1,0 +1,209 @@
+// GojekExtension (skeleton) — intended for use with Aix Extensions Maker / Ant to build .aix
+// Place this file under: components/src/com/yourdomain/gojek/GojekExtension.java
+
+package com.yourdomain.gojek;
+
+import com.google.appinventor.components.annotations.*;
+import com.google.appinventor.components.common.ComponentCategory;
+import com.google.appinventor.components.runtime.*;
+import android.content.Intent;
+import android.net.Uri;
+import android.location.Location;
+import android.os.Handler;
+import java.util.Random;
+import java.util.ArrayList;
+
+// Basic example extension that exposes a few methods/events you can call from Kodular
+// NOTE: This is a functional skeleton and uses simulated data for "nearby drivers" and fares.
+// Real map/driver integration requires Google Play Services, server backend, and additional permissions.
+
+@DesignerComponent(version = 1,
+    description = "Gojek-like helper extension (skeleton). Simulates driver discovery, fare estimate, and intents to maps.",
+    category = ComponentCategory.EXTENSION,
+    nonVisible = true,
+    iconName = "")
+@SimpleObject(external = true)
+public class GojekExtension extends AndroidNonvisibleComponent implements Component {
+    private final ComponentContainer container;
+    private final Handler handler;
+    private boolean simulateDriverUpdates = false;
+    private Random random = new Random();
+
+    public GojekExtension(ComponentContainer container) {
+        super(container.$form());
+        this.container = container;
+        this.handler = new Handler();
+    }
+
+    // ------ Properties ------
+    @SimpleProperty(description = "Set whether the extension will simulate driver location updates (true/false)")
+    public void SimulateDriverUpdates(boolean simulate) {
+        this.simulateDriverUpdates = simulate;
+    }
+
+    @SimpleProperty(description = "Returns whether simulation is enabled")
+    public boolean SimulateDriverUpdates() {
+        return this.simulateDriverUpdates;
+    }
+
+    // ------ Methods ------
+    @SimpleFunction(description = "Estimate fare between two points. Coordinates as strings: 'lat,lon'. Returns estimated price as integer (IDR).")
+    public int EstimateFare(String originLatLng, String destLatLng) {
+        // Basic parsing and Haversine distance -> simple fare calculation
+        try {
+            String[] o = originLatLng.split(",");
+            String[] d = destLatLng.split(",");
+            double lat1 = Double.parseDouble(o[0].trim());
+            double lon1 = Double.parseDouble(o[1].trim());
+            double lat2 = Double.parseDouble(d[0].trim());
+            double lon2 = Double.parseDouble(d[1].trim());
+            double distKm = haversine(lat1, lon1, lat2, lon2);
+            // Pricing: base 5000 + 2500 per km (example)
+            int fare = (int) Math.round(5000 + 2500 * distKm);
+            return fare;
+        } catch (Exception e) {
+            return -1; // error
+        }
+    }
+
+    @SimpleFunction(description = "Open external Maps app for navigation from origin to destination. Coordinates in 'lat,lon'.")
+    public void OpenMapsNavigation(String originLatLng, String destLatLng) {
+        try {
+            // Use Google Maps navigation URI
+            String uri = "https://www.google.com/maps/dir/?api=1&origin=" +
+                         Uri.encode(originLatLng) + "&destination=" + Uri.encode(destLatLng) + "&travelmode=driving";
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(uri));
+            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            container.$context().startActivity(intent);
+        } catch (Exception e) {
+            // silently ignore; user can handle errors by checking exceptions in wrapper
+        }
+    }
+
+    @SimpleFunction(description = "Simulate finding nearby drivers. Fires NearbyDriverFound event for each simulated driver.")
+    public void FindNearbyDrivers(String originLatLng, int count) {
+        // Simulated drivers — generate `count` drivers with random offsets
+        String[] o = originLatLng.split(",");
+        double baseLat = Double.parseDouble(o[0].trim());
+        double baseLon = Double.parseDouble(o[1].trim());
+        ArrayList<String> drivers = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            double lat = baseLat + (random.nextDouble() - 0.5) * 0.02; // ~1-2 km
+            double lon = baseLon + (random.nextDouble() - 0.5) * 0.02;
+            String id = "DRV" + (1000 + random.nextInt(9000));
+            String driverStr = id + ";" + lat + "," + lon + ";" + (1 + random.nextInt(5)) + ";" + (3 + random.nextInt(7));
+            // Format: ID;lat,lon;rating;eta_minutes
+            drivers.add(driverStr);
+        }
+        // Fire events one by one with small delay to mimic streaming discovery
+        for (int i = 0; i < drivers.size(); i++) {
+            final String drv = drivers.get(i);
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    NearbyDriverFound(drv);
+                }
+            }, i * 400); // 400ms interval
+        }
+
+        // If simulation of continuous updates requested, start background updates
+        if (simulateDriverUpdates) {
+            startDriverUpdates(drivers);
+        }
+    }
+
+    // ------ Events ------
+    @SimpleEvent(description = "Fired when a nearby driver is found. Argument format: 'ID;lat,lon;rating;eta' (string)")
+    public void NearbyDriverFound(String driverInfo) {
+        EventDispatcher.dispatchEvent(this, "NearbyDriverFound", driverInfo);
+    }
+
+    @SimpleEvent(description = "Fired when a driver accepts the ride. Provides driver ID and estimated arrival minutes.")
+    public void OnDriverAccepted(String driverId, int etaMinutes) {
+        EventDispatcher.dispatchEvent(this, "OnDriverAccepted", driverId, etaMinutes);
+    }
+
+    @SimpleEvent(description = "Fired periodically with simulated driver location updates. Format: 'ID;lat,lon'")
+    public void OnDriverLocationUpdate(String driverInfo) {
+        EventDispatcher.dispatchEvent(this, "OnDriverLocationUpdate", driverInfo);
+    }
+
+    // ------ Helpers ------
+    private void startDriverUpdates(final ArrayList<String> drivers) {
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                // mutate driver positions slightly and fire updates
+                for (int i = 0; i < drivers.size(); i++) {
+                    String[] parts = drivers.get(i).split(";");
+                    String id = parts[0];
+                    String[] latlon = parts[1].split(",");
+                    double lat = Double.parseDouble(latlon[0]) + (random.nextDouble() - 0.5) * 0.0005;
+                    double lon = Double.parseDouble(latlon[1]) + (random.nextDouble() - 0.5) * 0.0005;
+                    String info = id + ";" + lat + "," + lon;
+                    OnDriverLocationUpdate(info);
+                }
+                // schedule next update
+                if (simulateDriverUpdates) {
+                    handler.postDelayed(this, 3000);
+                }
+            }
+        }, 3000);
+    }
+
+    // Simple Haversine formula
+    private double haversine(double lat1, double lon1, double lat2, double lon2) {
+        final int R = 6371; // Radius of earth in km
+        double dLat = Math.toRadians(lat2 - lat1);
+        double dLon = Math.toRadians(lon2 - lon1);
+        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+                + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
+                * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+    }
+}
+
+/*
+README & Build Instructions (put this as README.md in project root)
+
+Project structure (example):
+
+AixExtensionProject/
+  build.xml          <-- ant build file (see snippet below)
+  components/
+    src/
+      com/yourdomain/gojek/GojekExtension.java
+  lib/               <-- any external jars (if needed). e.g., appinventor-annotations jar
+
+build.xml snippet (basic):
+
+<?xml version="1.0"?>
+<project name="GojekAix" default="aix">
+  <property name="src.dir" value="components/src"/>
+  <property name="classes.dir" value="build/classes"/>
+  <target name="clean">
+    <delete dir="build"/>
+    <delete dir="dist"/>
+  </target>
+  <target name="compile">
+    <mkdir dir="${classes.dir}"/>
+    <javac srcdir="${src.dir}" destdir="${classes.dir}" includeantruntime="false" fork="true">
+      <!-- add classpath if you have external jars -->
+    </javac>
+  </target>
+  <target name="aix" depends="compile">
+    <!-- Aix Extensions Maker usually expects a particular layout; this is a minimal packaging example -->
+    <mkdir dir="dist"/>
+    <jar destfile="dist/GojekExtension.aix" basedir="${classes.dir}">
+      <!-- include manifest and metadata as needed by Kodular/Aix -->
+    </jar>
+  </target>
+</project>
+
+Notes & Next Steps:
+- This extension uses only Android intents and simulated data — for a production-ready Gojek clone you'd need server APIs, authentication, Google Maps SDK, and background services.
+- To compile into .aix you can use the Aix Extensions Maker project as your base; copy this source into its components/src folder and follow that project's README for ant targets and metadata files (extension annotations, manifest entries).
+- Add the App Inventor / Kodular annotations JAR to the classpath when compiling. Some projects include it in lib/.
+- If you want me to add specific features from the YouTube video (UI flow, exact functionalities), paste a short list of features you want implemented and I will extend the code accordingly.
+*/
